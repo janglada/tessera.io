@@ -14,20 +14,20 @@ public final class TesseractBindings {
     private static final SymbolLookup LOOKUP;
 
     static {
-        // Try to find tesseract library
-        SymbolLookup loaderLookup = SymbolLookup.loaderLookup();
-        Optional<MemorySegment> libTesseract = SymbolLookup.libraryLookup("tesseract", Arena.global())
-                .find("TessBaseAPICreate")
-                .map(s -> s); // Just check if it works
-
-        if (libTesseract.isPresent()) {
-            LOOKUP = SymbolLookup.libraryLookup("tesseract", Arena.global());
-        } else {
-            // Fallback to searching in common paths if not found by default
-            // This is a bit hacky but helps in some environments
-            String libPath = "/usr/lib/x86_64-linux-gnu/libtesseract.so.5";
-            LOOKUP = SymbolLookup.libraryLookup(libPath, Arena.global());
+        SymbolLookup lookup;
+        try {
+            lookup = SymbolLookup.libraryLookup("tesseract", Arena.global());
+        } catch (IllegalArgumentException e) {
+            try {
+                // Try with versioned name on linux
+                lookup = SymbolLookup.libraryLookup("tesseract.so.5", Arena.global());
+            } catch (IllegalArgumentException e2) {
+                // Fallback to absolute path
+                String libPath = "/usr/lib/x86_64-linux-gnu/libtesseract.so.5";
+                lookup = SymbolLookup.libraryLookup(libPath, Arena.global());
+            }
         }
+        LOOKUP = lookup;
     }
 
     public static final MethodHandle TessBaseAPICreate = LINKER.downcallHandle(

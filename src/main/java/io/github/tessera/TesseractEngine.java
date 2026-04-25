@@ -33,7 +33,7 @@ public final class TesseractEngine implements AutoCloseable {
             MemorySegment dataPath = builder.dataPath != null ? arena.allocateFrom(builder.dataPath) : MemorySegment.NULL;
             MemorySegment language = builder.language != null ? arena.allocateFrom(builder.language) : MemorySegment.NULL;
 
-            int res = (int) TesseractBindings.TessBaseAPIInit3.invokeExact(handle, dataPath, language, 3); // 3 = OEM_DEFAULT
+            int res = (int) TesseractBindings.TessBaseAPIInit3.invokeExact(handle, dataPath, language);
             if (res != 0) {
                 throw new TesseraException("Failed to initialize Tesseract with dataPath=" + builder.dataPath + ", language=" + builder.language);
             }
