@@ -21,7 +21,21 @@ import java.util.Map;
 
 /**
  * High-level API for Tesseract OCR.
- * This class is NOT thread-safe, but multiple instances can be used concurrently.
+ * This class provides a fluent, idiomatic Java interface to the Tesseract native engine
+ * using the Foreign Function &amp; Memory (FFM) API.
+ *
+ * <p>Example usage:</p>
+ * <pre>{@code
+ * try (var engine = TesseractEngine.builder()
+ *         .language("eng")
+ *         .build()) {
+ *     OcrResult result = engine.recognize(Path.of("image.png"));
+ *     System.out.println(result.text());
+ * }
+ * }</pre>
+ *
+ * <p>Note: This class is NOT thread-safe. Each thread should create its own instance,
+ * as the underlying Tesseract C API handle is not re-entrant.</p>
  */
 public final class TesseractEngine implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(TesseractEngine.class);
