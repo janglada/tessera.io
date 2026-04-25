@@ -2,7 +2,6 @@ package io.github.tessera.internal;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
-import java.util.Optional;
 
 import static java.lang.foreign.ValueLayout.*;
 

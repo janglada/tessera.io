@@ -1,6 +1,11 @@
 package io.github.tessera;
 
 import io.github.tessera.internal.TesseractBindings;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.rendering.PDFRenderer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -9,16 +14,18 @@ import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-
-import static java.lang.foreign.ValueLayout.ADDRESS;
 
 /**
  * High-level API for Tesseract OCR.
  * This class is NOT thread-safe, but multiple instances can be used concurrently.
  */
 public final class TesseractEngine implements AutoCloseable {
+    private static final Logger logger = LoggerFactory.getLogger(TesseractEngine.class);
+
     private final Arena arena;
     private final MemorySegment handle;
 
@@ -29,44 +36,94 @@ public final class TesseractEngine implements AutoCloseable {
             if (this.handle.equals(MemorySegment.NULL)) {
                 throw new TesseraException("Failed to create Tesseract API handle");
             }
+            logger.debug("Tesseract API handle created: {}", handle);
 
             MemorySegment dataPath = builder.dataPath != null ? arena.allocateFrom(builder.dataPath) : MemorySegment.NULL;
             MemorySegment language = builder.language != null ? arena.allocateFrom(builder.language) : MemorySegment.NULL;
 
+            logger.info("Initializing Tesseract with dataPath={}, language={}", builder.dataPath, builder.language);
             int res = (int) TesseractBindings.TessBaseAPIInit3.invokeExact(handle, dataPath, language);
             if (res != 0) {
                 throw new TesseraException("Failed to initialize Tesseract with dataPath=" + builder.dataPath + ", language=" + builder.language);
             }
 
             if (builder.pageSegMode != null) {
+                logger.debug("Setting PageSegMode: {}", builder.pageSegMode);
                 TesseractBindings.TessBaseAPISetPageSegMode.invokeExact(handle, builder.pageSegMode.getValue());
             }
 
             for (var entry : builder.variables.entrySet()) {
+                logger.debug("Setting Tesseract variable: {}={}", entry.getKey(), entry.getValue());
                 MemorySegment name = arena.allocateFrom(entry.getKey());
                 MemorySegment value = arena.allocateFrom(entry.getValue());
-                TesseractBindings.TessBaseAPISetVariable.invokeExact(handle, name, value);
+                int success = (int) TesseractBindings.TessBaseAPISetVariable.invokeExact(handle, name, value);
+                if (success == 0) {
+                    logger.warn("Failed to set Tesseract variable: {}", entry.getKey());
+                }
             }
         } catch (Throwable t) {
             arena.close();
+            logger.error("Error during Tesseract initialization", t);
             if (t instanceof TesseraException te) throw te;
             throw new TesseraException("Error initializing Tesseract engine", t);
         }
     }
 
     /**
-     * Recognizes text in the given image file.
+     * Recognizes text in the given image or PDF file.
+     * If it's a multi-page file (like PDF), only the first page is returned.
+     * Use {@link #recognizePages(Path)} for multi-page support.
      *
-     * @param imagePath path to the image file
-     * @return the OCR result
+     * @param imagePath path to the image or PDF file
+     * @return the OCR result for the first page
      * @throws IOException if the file cannot be read
      */
     public OcrResult recognize(Path imagePath) throws IOException {
+        logger.info("Recognizing file: {}", imagePath);
+        String fileName = imagePath.getFileName().toString().toLowerCase();
+        if (fileName.endsWith(".pdf")) {
+            List<OcrResult> results = recognizePdf(imagePath);
+            return results.isEmpty() ? new OcrResult("", 0, "") : results.get(0);
+        }
+
         BufferedImage image = ImageIO.read(imagePath.toFile());
         if (image == null) {
             throw new IOException("Failed to decode image: " + imagePath);
         }
         return recognize(image);
+    }
+
+    /**
+     * Recognizes all pages in the given file (supports PDF).
+     *
+     * @param path path to the file
+     * @return a list of OCR results, one per page
+     * @throws IOException if the file cannot be read
+     */
+    public List<OcrResult> recognizePages(Path path) throws IOException {
+        logger.info("Recognizing all pages in file: {}", path);
+        String fileName = path.getFileName().toString().toLowerCase();
+        if (fileName.endsWith(".pdf")) {
+            return recognizePdf(path);
+        } else {
+            return List.of(recognize(path));
+        }
+    }
+
+    private List<OcrResult> recognizePdf(Path pdfPath) throws IOException {
+        logger.info("Processing PDF: {}", pdfPath);
+        List<OcrResult> results = new ArrayList<>();
+        try (PDDocument document = Loader.loadPDF(pdfPath.toFile())) {
+            int pageCount = document.getNumberOfPages();
+            logger.debug("PDF has {} pages", pageCount);
+            PDFRenderer renderer = new PDFRenderer(document);
+            for (int i = 0; i < pageCount; i++) {
+                logger.debug("Rendering PDF page {}", i + 1);
+                BufferedImage image = renderer.renderImageWithDPI(i, 300);
+                results.add(recognize(image));
+            }
+        }
+        return results;
     }
 
     /**
@@ -76,11 +133,11 @@ public final class TesseractEngine implements AutoCloseable {
      * @return the OCR result
      */
     public OcrResult recognize(BufferedImage image) {
-        // Convert to a format Tesseract likes: 3-byte BGR or 1-byte Gray
         int type = image.getType();
         BufferedImage processed = image;
         int bytesPerPixel;
         if (type != BufferedImage.TYPE_3BYTE_BGR && type != BufferedImage.TYPE_BYTE_GRAY) {
+            logger.debug("Converting BufferedImage from type {} to TYPE_3BYTE_BGR", type);
             processed = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_3BYTE_BGR);
             var g = processed.createGraphics();
             g.drawImage(image, 0, 0, null);
@@ -105,6 +162,7 @@ public final class TesseractEngine implements AutoCloseable {
      * @return the OCR result
      */
     public OcrResult recognize(byte[] pixels, int width, int height, int bytesPerPixel, int bytesPerLine) {
+        logger.debug("Recognizing raw pixels: {}x{}, {} bpp", width, height, bytesPerPixel);
         try (Arena sessionArena = Arena.ofConfined()) {
             MemorySegment pixelSegment = sessionArena.allocateFrom(java.lang.foreign.ValueLayout.JAVA_BYTE, pixels);
             TesseractBindings.TessBaseAPISetImage.invokeExact(handle, pixelSegment, width, height, bytesPerPixel, bytesPerLine);
@@ -119,14 +177,16 @@ public final class TesseractEngine implements AutoCloseable {
             TesseractBindings.TessDeleteText.invokeExact(textPtr);
 
             int confidence = (int) TesseractBindings.TessBaseAPIMeanTextConf.invokeExact(handle);
+            logger.debug("Recognition complete, confidence: {}", confidence);
 
             // Get hOCR optionally (let's just get it)
-            MemorySegment hocrPtr = (MemorySegment) TesseractBindings.TessBaseAPIGetHOCRText.invokeExact(handle, MemorySegment.NULL, 0);
+            MemorySegment hocrPtr = (MemorySegment) TesseractBindings.TessBaseAPIGetHOCRText.invokeExact(handle, 0);
             String hocr = hocrPtr.reinterpret(Long.MAX_VALUE).getString(0);
             TesseractBindings.TessDeleteText.invokeExact(hocrPtr);
 
             return new OcrResult(text, confidence, hocr);
         } catch (Throwable t) {
+            logger.error("Error during OCR recognition process", t);
             if (t instanceof TesseraException te) throw te;
             throw new TesseraException("Error during OCR process", t);
         }
@@ -134,10 +194,11 @@ public final class TesseractEngine implements AutoCloseable {
 
     @Override
     public void close() {
+        logger.info("Closing Tesseract engine");
         try {
             TesseractBindings.TessBaseAPIDelete.invokeExact(handle);
         } catch (Throwable t) {
-            // Log or ignore
+            logger.error("Error deleting Tesseract API handle", t);
         } finally {
             arena.close();
         }
