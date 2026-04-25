@@ -1,7 +1,0 @@
-io/github/tessera/TesseractEngine$Builder.class
-io/github/tessera/internal/TesseractBindings.class
-module-info.class
-io/github/tessera/PageSegMode.class
-io/github/tessera/OcrResult.class
-io/github/tessera/TesseraException.class
-io/github/tessera/TesseractEngine.class
