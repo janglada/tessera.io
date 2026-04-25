@@ -52,7 +52,7 @@ public final class TesseractBindings {
 
     public static final MethodHandle TessBaseAPISetVariable = LINKER.downcallHandle(
             LOOKUP.find("TessBaseAPISetVariable").get(),
-            FunctionDescriptor.of(JAVA_BOOLEAN, ADDRESS, ADDRESS, ADDRESS)
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS)
     );
 
     public static final MethodHandle TessBaseAPISetPageSegMode = LINKER.downcallHandle(
